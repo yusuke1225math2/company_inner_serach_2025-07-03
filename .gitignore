@@ -163,4 +163,5 @@ cython_debug/
 
 # original
 .chroma/
-logs/
+logs/*
+!logs/.gitkeep
