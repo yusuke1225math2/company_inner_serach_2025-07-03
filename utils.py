@@ -5,16 +5,15 @@
 ############################################################
 # ライブラリの読み込み
 ############################################################
-import os
-from dotenv import load_dotenv
 import streamlit as st
+from dotenv import load_dotenv
+from langchain.chains import create_history_aware_retriever, create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.schema import HumanMessage
 from langchain_openai import ChatOpenAI
-from langchain.chains import create_history_aware_retriever, create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
-import constants as ct
 
+import constants as ct
 
 ############################################################
 # 設定関連
@@ -26,6 +25,7 @@ load_dotenv()
 ############################################################
 # 関数定義
 ############################################################
+
 
 def get_source_icon(source):
     """
@@ -42,7 +42,7 @@ def get_source_icon(source):
         icon = ct.LINK_SOURCE_ICON
     else:
         icon = ct.DOC_SOURCE_ICON
-    
+
     return icon
 
 
@@ -69,48 +69,71 @@ def get_llm_response(chat_message):
     Returns:
         LLMからの回答
     """
-    # LLMのオブジェクトを用意
-    llm = ChatOpenAI(model_name=ct.MODEL, temperature=ct.TEMPERATURE)
+    try:
+        import logging
 
-    # 会話履歴なしでもLLMに理解してもらえる、独立した入力テキストを取得するためのプロンプトテンプレートを作成
-    question_generator_template = ct.SYSTEM_PROMPT_CREATE_INDEPENDENT_TEXT
-    question_generator_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", question_generator_template),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}")
-        ]
-    )
+        logger = logging.getLogger(ct.LOGGER_NAME)
+        logger.info("LLMオブジェクト作成開始")
 
-    # モードによってLLMから回答を取得する用のプロンプトを変更
-    if st.session_state.mode == ct.ANSWER_MODE_1:
-        # モードが「社内文書検索」の場合のプロンプト
-        question_answer_template = ct.SYSTEM_PROMPT_DOC_SEARCH
-    else:
-        # モードが「社内問い合わせ」の場合のプロンプト
-        question_answer_template = ct.SYSTEM_PROMPT_INQUIRY
-    # LLMから回答を取得する用のプロンプトテンプレートを作成
-    question_answer_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", question_answer_template),
-            MessagesPlaceholder("chat_history"),
-            ("human", "{input}")
-        ]
-    )
+        # LLMのオブジェクトを用意
+        llm = ChatOpenAI(model_name=ct.MODEL, temperature=ct.TEMPERATURE)
+        logger.info("LLMオブジェクト作成完了")
 
-    # 会話履歴なしでもLLMに理解してもらえる、独立した入力テキストを取得するためのRetrieverを作成
-    history_aware_retriever = create_history_aware_retriever(
-        llm, st.session_state.retriever, question_generator_prompt
-    )
+        # 会話履歴なしでもLLMに理解してもらえる、独立した入力テキストを取得するためのプロンプトテンプレートを作成
+        logger.info("プロンプトテンプレート作成開始")
+        question_generator_template = ct.SYSTEM_PROMPT_CREATE_INDEPENDENT_TEXT
+        question_generator_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", question_generator_template),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{input}"),
+            ]
+        )
 
-    # LLMから回答を取得する用のChainを作成
-    question_answer_chain = create_stuff_documents_chain(llm, question_answer_prompt)
-    # 「RAG x 会話履歴の記憶機能」を実現するためのChainを作成
-    chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+        # モードによってLLMから回答を取得する用のプロンプトを変更
+        if st.session_state.mode == ct.ANSWER_MODE_1:
+            # モードが「社内文書検索」の場合のプロンプト
+            question_answer_template = ct.SYSTEM_PROMPT_DOC_SEARCH
+        else:
+            # モードが「社内問い合わせ」の場合のプロンプト
+            question_answer_template = ct.SYSTEM_PROMPT_INQUIRY
+        # LLMから回答を取得する用のプロンプトテンプレートを作成
+        question_answer_prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", question_answer_template),
+                MessagesPlaceholder("chat_history"),
+                ("human", "{input}"),
+            ]
+        )
+        logger.info("プロンプトテンプレート作成完了")
 
-    # LLMへのリクエストとレスポンス取得
-    llm_response = chain.invoke({"input": chat_message, "chat_history": st.session_state.chat_history})
-    # LLMレスポンスを会話履歴に追加
-    st.session_state.chat_history.extend([HumanMessage(content=chat_message), llm_response["answer"]])
+        # 会話履歴なしでもLLMに理解してもらえる、独立した入力テキストを取得するためのRetrieverを作成
+        logger.info("Retriever作成開始")
+        history_aware_retriever = create_history_aware_retriever(
+            llm, st.session_state.retriever, question_generator_prompt
+        )
 
-    return llm_response
+        # LLMから回答を取得する用のChainを作成
+        question_answer_chain = create_stuff_documents_chain(
+            llm, question_answer_prompt
+        )
+        # 「RAG x 会話履歴の記憶機能」を実現するためのChainを作成
+        chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+        logger.info("Chain作成完了")
+
+        # LLMへのリクエストとレスポンス取得
+        logger.info("LLMリクエスト開始")
+        llm_response = chain.invoke(
+            {"input": chat_message, "chat_history": st.session_state.chat_history}
+        )
+        # LLMレスポンスを会話履歴に追加
+        st.session_state.chat_history.extend(
+            [HumanMessage(content=chat_message), llm_response["answer"]]
+        )
+        logger.info("LLMレスポンス取得完了")
+
+        return llm_response
+
+    except Exception as e:
+        logger.error(f"LLM回答取得エラー: {e}")
+        raise e
